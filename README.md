@@ -1,0 +1,2 @@
+# EfficientDet
+The Minimalists EfficientDet
