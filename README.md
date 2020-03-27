@@ -1,2 +1,5 @@
-# EfficientDet
-The Minimalists EfficientDet
+# minimalists-efficientdet
+
+Implementation of efficientdet in pytorch, as simple as possible.
+
+
