@@ -25,7 +25,8 @@ BlockParams = collections.namedtuple(
 )
 
 
-def get_efficientnet_params(model_name):
+def get_efficientnet_params(model_name: str) -> ModelParams:
+    """ model parameters definition """
     params_dict = {
         "efficientnet-b0": ModelParams(1.0, 1.0, 224, 0.2),
         "efficientnet-b1": ModelParams(1.0, 1.1, 240, 0.2),
@@ -42,6 +43,11 @@ def get_efficientnet_params(model_name):
 
 
 def get_default_blocks_params() -> List[BlockParams]:
+    """ Model architecture for efficientNet B0
+
+    Returns:
+        List[BlockParams]: List of MBConv parameters (not including the stem)
+    """
     return [
         BlockParams(1, 3, 1, 32, 16, 1, 0.25),
         BlockParams(2, 3, 2, 16, 24, 6, 0.25),
@@ -58,15 +64,16 @@ class Swish(nn.Module):
         return x * torch.sigmoid(x)
 
 
-def scale_repeats(depth: int, model_params: ModelParams):
-    """ compound scaling for depth coefficinet """
+def scale_repeats(depth: int, model_params: ModelParams) -> int:
+    """ depth scaling """
     return math.ceil(depth * model_params.depth_coefficient)
 
 
-def scale_filters(filter: int, model_params: ModelParams):
-    """ compound scaling for width coefficient """
-    divisor: int = 8  # ensure filter size is divisible by 8
-    estimated_filter = filter * model_params.width_coefficient
+def scale_filters(filter_size: int, model_params: ModelParams) -> int:
+    """ width scaling """
+
+    divisor: int = 8  # filter size is divisible by 8
+    estimated_filter = filter_size * model_params.width_coefficient
 
     # round to the nearest multipler of divisor
     multiplier = round((estimated_filter / divisor))
@@ -77,6 +84,8 @@ def scale_filters(filter: int, model_params: ModelParams):
 def compound_scaling(
     block_params: BlockParams, model_params: ModelParams
 ) -> BlockParams:
+    """ helper function for applying compound scaling to block parameters """
+
     return block_params._replace(
         in_channels=scale_filters(block_params.in_channels, model_params),
         out_channels=scale_filters(block_params.out_channels, model_params),
@@ -85,26 +94,17 @@ def compound_scaling(
 
 
 class StemBlock(nn.Module):
-    IN_CHANNELS: int = 3
-    STRIDE: int = 2
-    KERNEL_SIZE: int = 3
-    OUT_CHANNELS: int = 32
-    PADDING: int = 1
-
     def __init__(self, model_params: ModelParams):
         super(StemBlock, self).__init__()
-        self._model_params = model_params
 
-        self._out_channels = scale_filters(
-            StemBlock.OUT_CHANNELS, self._model_params
-        )
+        self._out_channels = scale_filters(32, model_params)
 
         self._conv = nn.Conv2d(
-            in_channels=StemBlock.IN_CHANNELS,
+            in_channels=3,
             out_channels=self._out_channels,
-            kernel_size=StemBlock.KERNEL_SIZE,
-            stride=StemBlock.STRIDE,
-            padding=StemBlock.PADDING,
+            kernel_size=3,
+            stride=2,
+            padding=1,
             bias=False,
         )
 
@@ -113,19 +113,23 @@ class StemBlock(nn.Module):
         self._act = Swish()
 
     def forward(self, x):
-        x = self._conv(x)
-        x = self._bn(x)
-        x = self._act(x)
+        x = self._act(self._bn(self._conv(x)))
         return x
 
 
 class MBConvBlock(nn.Module):
-    """ this module has several components
+    """ The MBConv Module
 
-    # 1. expansion from residual bottle neck
+    This module has 4 components:
+
+    # 1. expansion from residual bottle-neck
     # 2. depthwise convolution
     # 3. squeeze and excitation
     # 4. projection
+
+    # 1, 2, and 4 are described in MobileNetV2 (https://arxiv.org/abs/1801.04381)
+    # 3 is described in Squeeze-and-Excitation (https://arxiv.org/abs/1709.01507)
+
     """
 
     def __init__(self, block_params: BlockParams):
@@ -142,11 +146,11 @@ class MBConvBlock(nn.Module):
             out_channels=exp_out_channels,
             kernel_size=1,
             bias=False,
-            # TODO: shall we consider padding here?
         )
         self._expand_bn = nn.BatchNorm2d(num_features=exp_out_channels)
 
         # 2. Depthwise Convolutions
+        # TODO: valid the padding is correct
         self._depthwise_conv = nn.Conv2d(
             in_channels=exp_out_channels,
             out_channels=exp_out_channels,
@@ -231,6 +235,7 @@ class EfficientNet(nn.Module):
         self._act = Swish()
 
         # TODO: there a better abstraction?
+
         # compound scaling
         for block_params in get_default_blocks_params():
             scaled_params = compound_scaling(block_params, self._model_params)
