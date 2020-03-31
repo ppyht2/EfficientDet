@@ -101,14 +101,14 @@ class StemBlock(nn.Module):
 
         self._conv = nn.Conv2d(
             in_channels=StemBlock.IN_CHANNELS,
-            out_channels=self.out_channels,
+            out_channels=self._out_channels,
             kernel_size=StemBlock.KERNEL_SIZE,
             stride=StemBlock.STRIDE,
             padding=StemBlock.PADDING,
             bias=False,
         )
 
-        self._bn = nn.BatchNorm2d(num_features=self.out_channels)
+        self._bn = nn.BatchNorm2d(num_features=self._out_channels)
 
         self._act = Swish()
 
@@ -129,6 +129,7 @@ class MBConvBlock(nn.Module):
     """
 
     def __init__(self, block_params: BlockParams):
+        super(MBConvBlock, self).__init__()
         self._block_params = block_params
 
         self._act = Swish()
@@ -151,6 +152,7 @@ class MBConvBlock(nn.Module):
             out_channels=exp_out_channels,
             groups=exp_out_channels,  # depthwise
             kernel_size=self._block_params.kernel_size,
+            padding=self._block_params.kernel_size // 2,
             stride=self._block_params.stride,
             bias=False,
         )
@@ -191,32 +193,23 @@ class MBConvBlock(nn.Module):
         x = xi
 
         # 1. Expansion
-        x = self._expand_conv(x)
-        x = self._expand_bn(x)
-        x = self._act(x)
+        x = self._act(self._expand_bn(self._expand_conv(x)))
 
         # 2. Depthwise Convolution
-        x = self._depthwise_conv(x)
-        x = self._depthwise_bn(x)
-        x = self._act(x)
+        x = self._act(self._depthwise_bn(self._depthwise_conv(x)))
 
         # 3. Squeeze and Excitation
         x_se = x
-
         # squeeze
         x_se = F.adaptive_avg_pool2d(x_se, 1)  # global average pool
-        x_se = self._squeeze_conv(x_se)
-        x_se = self._act(x_se)
+        x_se = self._act(self._squeeze_conv(x_se))
 
         # excitation
-        x_se = self._excitation_conv(x_se)
-        x_se = torch.sigmoid(x_se)
-
+        x_se = torch.sigmoid(self._excitation_conv(x_se))
         x = x_se * x
 
         # 4. Projection
-        x = self._project_conv(x)
-        x = self._project_bn(x)
+        x = self._project_bn(self._project_conv(x))  # no activation
 
         # skip connection if possible
         if (
@@ -230,14 +223,12 @@ class MBConvBlock(nn.Module):
 
 
 class EfficientNet(nn.Module):
-    def __init__(
-        self, model_params: ModelParams,
-    ):
+    def __init__(self, model_params: ModelParams, num_classes: int):
+        super(EfficientNet, self).__init__()
+        self._num_classes = num_classes
         self._model_params = model_params
-        self._blocks = nn.ModuleList([])
-
-        # Stem
-        self._blocks.append(StemBlock(self._model_params))
+        self._blocks = nn.ModuleList([StemBlock(self._model_params)])  # stem
+        self._act = Swish()
 
         # TODO: there a better abstraction?
         # compound scaling
@@ -255,6 +246,30 @@ class EfficientNet(nn.Module):
                 self._blocks.append(MBConvBlock(scaled_params))
 
         # classification head
+        out_channels = scale_filters(1280, self._model_params)
+        self._head_conv = nn.Conv2d(
+            in_channels=scaled_params.out_channels,
+            out_channels=out_channels,
+            kernel_size=1,
+            bias=False,
+        )
+        self._head_bn = nn.BatchNorm2d(num_features=out_channels)
 
-    def forward(self, x):
-        pass
+        self._pool = nn.AdaptiveAvgPool2d(output_size=1)
+        self._dropout = nn.Dropout(self._model_params.dropout_rate)
+        self._fc = nn.Linear(
+            in_features=out_channels, out_features=self._num_classes
+        )
+
+    def forward(self, xi):
+        batch_size = xi.size(0)
+
+        x = xi
+        for block in self._blocks:
+            x = block(x)
+
+        x = self._act(self._head_bn(self._head_conv(x)))
+        x = self._pool(x)
+        x = x.view(batch_size, -1)
+        x = self._fc(self._dropout(x))
+        return x
