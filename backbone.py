@@ -278,3 +278,8 @@ class EfficientNet(nn.Module):
         x = x.view(batch_size, -1)
         x = self._fc(self._dropout(x))
         return x
+
+    @classmethod
+    def from_name(cls, model_name: str, num_classes: int):
+        model_params = get_efficientnet_params(model_name)
+        return cls(model_params, num_classes)
