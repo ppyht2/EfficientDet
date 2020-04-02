@@ -29,6 +29,17 @@ def make_model():
     return EfficientNet.from_name("efficientnet-b0", N_CLASSES)
 
 
+def make_benchmark_model():
+    from efficientnet_pytorch import EfficientNet
+    from efficientnet_pytorch import utils
+
+    block_args, global_params = utils.get_model_params("efficientnet-b0", None)
+    net = EfficientNet(
+        block_args, global_params._replace(num_classes=N_CLASSES)
+    )
+    return net
+
+
 def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
